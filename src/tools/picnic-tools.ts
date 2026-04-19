@@ -596,6 +596,135 @@ const verify2FAInputSchema = z.object({
   code: z.string().describe("The 2FA code to verify"),
 })
 
+// ─── Recipe tools ────────────────────────────────────────────────────────────
+
+/**
+ * Extracts a compact recipe list from a Fusion Page response.
+ * Each PML tile contains the recipe_id in its analytics context and the
+ * recipe name + cooking time in its markdown fields.
+ */
+function extractRecipeList(pageData: unknown): Array<{ recipe_id: string; name: string; cooking_time_minutes: number | null }> {
+  const results: Array<{ recipe_id: string; name: string; cooking_time_minutes: number | null }> = []
+  const seen = new Set<string>()
+
+  function getMarkdowns(obj: unknown, acc: string[]): void {
+    if (!obj || typeof obj !== "object") return
+    if (Array.isArray(obj)) { obj.forEach(v => getMarkdowns(v, acc)); return }
+    const o = obj as Record<string, unknown>
+    if (typeof o.markdown === "string") acc.push(o.markdown)
+    for (const v of Object.values(o)) getMarkdowns(v, acc)
+  }
+
+  function walk(obj: unknown): void {
+    if (!obj || typeof obj !== "object") return
+    if (Array.isArray(obj)) { obj.forEach(walk); return }
+    const o = obj as Record<string, unknown>
+    if (o.type === "PML" && o.pml && o.analytics) {
+      const ctx = (o.analytics as { contexts?: Array<{ data?: { recipe_id?: string } }> }).contexts ?? []
+      const recipeCtx = ctx.find(c => c.data?.recipe_id)
+      if (recipeCtx?.data?.recipe_id) {
+        const recipeId = recipeCtx.data.recipe_id
+        if (!seen.has(recipeId)) {
+          seen.add(recipeId)
+          const markdowns: string[] = []
+          getMarkdowns(o.pml, markdowns)
+          const texts = markdowns.map(t => t.replace(/#\([^)]+\)/g, "").trim()).filter(Boolean)
+          const name = texts[0] ?? ""
+          const timeText = texts.find(t => /Minuten|Stunden|Min|Std/.test(t)) ?? ""
+          const timeMatch = timeText.match(/(\d+)/)
+          const mult = /Stunden|Std/.test(timeText) ? 60 : 1
+          const cooking_time_minutes = timeMatch ? parseInt(timeMatch[1]) * mult : null
+          results.push({ recipe_id: recipeId, name, cooking_time_minutes })
+        }
+      }
+    }
+    for (const v of Object.values(o)) walk(v)
+  }
+
+  walk(pageData)
+  return results
+}
+
+toolRegistry.register({
+  name: "picnic_get_cookbook",
+  description: "Get current featured recipes (this week's curated selection). Returns a compact list with recipe_id, name, and cooking_time_minutes.",
+  inputSchema: z.object({}),
+  handler: async () => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const page = await client.app.getPage("cookbook-page-content?segment=ALL_RECIPES")
+    return extractRecipeList(page)
+  },
+})
+
+const recipesByCategoryInputSchema = z.object({
+  categoryPageId: z.string().describe(
+    "Category page ID. Available values: " +
+    "recipe-cattree-25min (Blitzrezepte ~1000), recipe-cattree-onepot, " +
+    "recipe-cattree-pasta (~248), recipe-cattree-stuffedpasta, recipe-cattree-lasagne, " +
+    "recipe-cattree-gnocchi, recipe-cattree-noodles, recipe-cattree-schupfnudeln, " +
+    "recipe-cattree-maultaschen, recipe-cattree-spaetzle, recipe-cattree-asia-reis, " +
+    "recipe-cattree-risotto, recipe-cattree-couscous, recipe-cattree-bulgur, " +
+    "recipe-cattree-knoedel, recipe-cattree-kartoffel, recipe-cattree-suppen (~78), " +
+    "recipe-cattree-eintopf, recipe-cattree-curry2, recipe-cattree-l2-salad, " +
+    "recipe-cattree-bowls, recipe-cattree-wraps, recipe-cattree-pita2, " +
+    "recipe-cattree-l2-burger, recipe-cattree-quiche, recipe-cattree-traybake, " +
+    "recipe-cattree-auflaufe, recipe-cattree-l2-pizza, " +
+    "recipe-cattree-vegetarisch (~930), recipe-cattree-vegan (~132), " +
+    "recipe-cattree-highinveg, recipe-cattree-brunch, recipe-cattree-aperitif, " +
+    "recipe-cattree-dessert, recipe-cattree-abendbrot, recipe-cattree-bbq, " +
+    "recipe-cattree-l2-party, recipe-cattree-basic, recipe-cattree-baking, " +
+    "recipe-cattree-snacks, recipe-cattree-getraenke, recipe-cattree-airfryer, " +
+    "recipe-cattree-budget (~628), recipe-cattree-jamieoliver, " +
+    "recipe-cattree-season (~183), recipe-cattree-l2-kids"
+  ),
+})
+
+toolRegistry.register({
+  name: "picnic_get_recipes_by_category",
+  description: "Get all recipes for a Picnic recipe category. Returns a compact list with recipe_id, name, and cooking_time_minutes. Categories contain hundreds of recipes each.",
+  inputSchema: recipesByCategoryInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const page = await client.app.getPage(args.categoryPageId)
+    return extractRecipeList(page)
+  },
+})
+
+const recipeDetailsInputSchema = z.object({
+  recipeId: z.string().describe("The recipe ID (24-char hex string from picnic_get_cookbook or picnic_get_recipes_by_category)"),
+})
+
+toolRegistry.register({
+  name: "picnic_get_recipe_details",
+  description: "Get full details of a single recipe including ingredients (with product IDs for adding to cart), cooking steps, cooking time, and servings.",
+  inputSchema: recipeDetailsInputSchema,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    return client.recipe.getRecipeDetailsPage(args.recipeId)
+  },
+})
+
+toolRegistry.register({
+  name: "picnic_add_recipe_to_cart",
+  description: "Add a product to the cart in the context of a recipe (for analytics and recipe stepper UI).",
+  inputSchema: z.object({
+    productId: z.string().describe("The product selling unit ID"),
+    recipeId: z.string().describe("The recipe ID this product belongs to"),
+    sectionId: z.string().optional().describe("Optional section ID within the recipe"),
+    count: z.number().min(1).default(1).describe("Number of units to add"),
+  }),
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    return client.recipe.addProductToRecipe(args.productId, args.recipeId, args.sectionId, args.count)
+  },
+})
+
+// ─── 2FA ─────────────────────────────────────────────────────────────────────
+
 toolRegistry.register({
   name: "picnic_verify_2fa_code",
   description: "Verify a 2FA code",
