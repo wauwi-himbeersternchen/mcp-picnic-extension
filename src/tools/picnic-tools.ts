@@ -647,7 +647,7 @@ function extractRecipeList(pageData: unknown): Array<{ recipe_id: string; name: 
 
 toolRegistry.register({
   name: "picnic_get_cookbook",
-  description: "Get current featured recipes (this week's curated selection). Returns a compact list with recipe_id, name, and cooking_time_minutes.",
+  description: "Get recipes shown on the Picnic cookbook homepage (mix of this week's picks, new recipes, collaborations, and saved recipes). Returns a compact list with recipe_id, name, and cooking_time_minutes.",
   inputSchema: z.object({}),
   handler: async () => {
     await ensureClientInitialized()
