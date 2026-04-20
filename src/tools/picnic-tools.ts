@@ -1088,17 +1088,27 @@ Returns top_k combinations sorted by score descending, ties broken by lowest tot
 
 toolRegistry.register({
   name: "picnic_add_recipe_to_cart",
-  description: "Add a product to the cart in the context of a recipe (for analytics and recipe stepper UI).",
+  description: "Add a product to the cart in the context of a recipe (for analytics and recipe stepper UI). Uses SELLING_GROUP context so Picnic associates the item with the recipe.",
   inputSchema: z.object({
     productId: z.string().describe("The product selling unit ID"),
     recipeId: z.string().describe("The recipe ID this product belongs to"),
-    sectionId: z.string().optional().describe("Optional section ID within the recipe"),
     count: z.number().min(1).default(1).describe("Number of units to add"),
   }),
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    return client.recipe.addProductToRecipe(args.productId, args.recipeId, args.sectionId, args.count)
+    // The picnic-api library incorrectly uses type "RECIPE" which is rejected by the API.
+    // The correct type is "SELLING_GROUP" with selling_group_creator_type "PIM" for editorial recipes.
+    // PicnicClient extends HttpClient directly, so sendRequest is on the client itself.
+    return (client as unknown as { sendRequest: (method: string, path: string, body: unknown) => Promise<unknown> }).sendRequest("POST", "/cart/add_product", {
+      product_id: args.productId,
+      count: args.count,
+      selling_unit_contexts: [{
+        type: "SELLING_GROUP",
+        selling_group_id: args.recipeId,
+        selling_group_creator_type: "PIM",
+      }],
+    })
   },
 })
 
