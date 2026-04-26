@@ -6,21 +6,22 @@ The following two methods can be used to list all MCP interfaces.
 
 ## 1. stdio
 
-Communicate with `mcp-picnic` (or `.start.sh`) via standard input/output:
+To run mcp-picnic as stdio server with `./bin/start.sh` via port 3000:
+
+First of all, you need to fill up the required information in ./.env with the same pattern in ./.env.example
+
+**Note:** In `picnic_authkey.json` you need to specify your picnic 2fa auth key like `{"authKey":"your picnic authKey"}`
 
 ```bash
-printf '%s\n' \
-'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}' \
-| mcp-picnic
-```
+./start.sh --enable-http --http-port 3000
 
-> **Note:** `mcp-picnic` can be replaced with `.start.sh`.
+```
 
 ---
 
 ## 2. HTTP + curl
 
-Communicate with a local service via HTTP request:
+Communicate with the local running picnic mcp server on port 3000:
 
 ```bash
 curl -i http://localhost:3000/mcp \
@@ -41,4 +42,3 @@ curl -i http://localhost:3000/mcp \
   }'
 ```
 
-> **Note:** The service must be running at `http://localhost:3000`.
